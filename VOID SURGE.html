@@ -14,7 +14,7 @@
 }
 *{margin:0;padding:0;box-sizing:border-box;user-select:none}
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);
-  font-family:"Segoe UI",system-ui,Arial,sans-serif;color:var(--cyan)}
+  font-family:"Segoe UI",system-ui,Arial,sans-serif;color:var(--cyan);touch-action:none}
 canvas{display:block;position:absolute;inset:0}
 
 /* ── CRT scanlines + vignette ─────────────────────────────── */
@@ -102,6 +102,27 @@ h1.title{font-size:64px;font-weight:900;letter-spacing:14px;
   animation:tin .3s ease-out;box-shadow:0 0 16px rgba(255,210,74,.3)}
 .toast small{display:block;opacity:.7;font-size:11px;margin-top:2px}
 @keyframes tin{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
+
+/* ── Touch controls (mobile) ─────────────────────────────── */
+#touchControls{position:fixed;inset:0;z-index:55;opacity:0;
+  transition:opacity .2s;pointer-events:none}
+#touchControls.visible{opacity:1}
+#joyBase{position:absolute;bottom:28px;left:28px;width:120px;height:120px;
+  border-radius:50%;background:rgba(125,249,255,.06);
+  border:2px solid rgba(125,249,255,.25)}
+#joyThumb{position:absolute;width:50px;height:50px;border-radius:50%;
+  background:rgba(125,249,255,.3);border:2px solid var(--cyan);
+  left:35px;top:35px;transition:transform .06s}
+.tbtn{position:absolute;border-radius:50%;border:2px solid;
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:bold;font-family:monospace;letter-spacing:1px;
+  background:rgba(0,0,0,.45);touch-action:none}
+#touchControls .tbtn{pointer-events:none}
+#touchControls.visible .tbtn{pointer-events:auto}
+#btnDash{bottom:160px;right:28px;width:64px;height:64px;
+  border-color:#2be8a0;color:#2be8a0}
+#btnBomb{bottom:80px;right:120px;width:64px;height:64px;
+  border-color:#ffd24a;color:#ffd24a}
 </style>
 </head>
 <body>
@@ -167,8 +188,24 @@ h1.title{font-size:64px;font-weight:900;letter-spacing:14px;
 
 <div id="toasts"></div>
 
+<!-- ═══════════ TOUCH CONTROLS (mobile) ═══════════ -->
+<div id="touchControls">
+  <div id="joyBase"><div id="joyThumb"></div></div>
+  <div class="tbtn" id="btnDash">DASH</div>
+  <div class="tbtn" id="btnBomb">BOMB</div>
+</div>
+
+<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 <script>
 'use strict';
+/* CrazyGames SDK — graceful no-op when SDK is absent (local dev) */
+const _cg=window.CrazyGames?.SDK;
+if(_cg){_cg.init().catch(()=>{});}
+function cgStart(){try{_cg?.game?.gameplayStart?.();}catch(e){}}
+function cgStop(){try{_cg?.game?.gameplayStop?.();}catch(e){}}
+function cgLoadingStart(){try{_cg?.game?.loadingStart?.();}catch(e){}}
+function cgLoadingStop(){try{_cg?.game?.loadingStop?.();}catch(e){}}
+cgLoadingStart();
 /* ══════════════════════════════════════════════════════════════
    VOID SURGE — GAME ENGINE
    Sections:
@@ -332,6 +369,63 @@ function handleKey(e){
       toast('AUTOFIRE '+(player.auto?'ENGAGED':'OFF'));}
   }
 }
+
+/* ══════════════ 8. EFFECTS ══════════════ */
+/* ── Touch controls (mobile) ─────────────────────────── */
+const isTouch=window.matchMedia('(pointer: coarse)').matches||('ontouchstart' in window&&navigator.maxTouchPoints>0);
+const tcEl=$('touchControls');
+if(isTouch){
+  window.addEventListener('touchstart',onTouchStart,{passive:false});
+  window.addEventListener('touchmove',onTouchMove,{passive:false});
+  window.addEventListener('touchend',onTouchEnd,{passive:false});
+  window.addEventListener('touchcancel',onTouchEnd,{passive:false});
+  $('btnDash').addEventListener('touchstart',e=>{e.preventDefault();e.stopPropagation();tryDash();},{passive:false});
+  $('btnBomb').addEventListener('touchstart',e=>{e.preventDefault();e.stopPropagation();tryBomb();},{passive:false});
+}
+const tJoy={id:null,cx:0,cy:0,dx:0,dy:0},tAim={id:null};
+function onTouchStart(e){
+  if(state!=='PLAY')return;
+  for(const t of e.changedTouches){
+    if(t.target.closest('.tbtn'))continue;
+    if(t.clientX<W/2&&tJoy.id===null){
+      tJoy.id=t.identifier;tJoy.cx=t.clientX;tJoy.cy=t.clientY;tJoy.dx=0;tJoy.dy=0;
+    }else if(t.clientX>=W/2&&tAim.id===null){
+      tAim.id=t.identifier;mouse.x=t.clientX;mouse.y=t.clientY;mouse.down=true;
+    }
+  }
+  e.preventDefault();
+}
+function onTouchMove(e){
+  if(state!=='PLAY')return;
+  for(const t of e.changedTouches){
+    if(t.identifier===tJoy.id){
+      tJoy.dx=t.clientX-tJoy.cx;tJoy.dy=t.clientY-tJoy.cy;
+      const m=Math.hypot(tJoy.dx,tJoy.dy),mx=55;
+      if(m>mx){tJoy.dx=tJoy.dx/m*mx;tJoy.dy=tJoy.dy/m*mx;}
+      $('joyThumb').style.transform=`translate(${tJoy.dx}px,${tJoy.dy}px)`;
+      const d=10;
+      keys.KeyW=tJoy.dy<-d;keys.KeyS=tJoy.dy>d;
+      keys.KeyA=tJoy.dx<-d;keys.KeyD=tJoy.dx>d;
+    }else if(t.identifier===tAim.id){
+      mouse.x=t.clientX;mouse.y=t.clientY;
+    }
+  }
+  e.preventDefault();
+}
+function onTouchEnd(e){
+  for(const t of e.changedTouches){
+    if(t.identifier===tJoy.id){
+      tJoy.id=null;tJoy.dx=0;tJoy.dy=0;
+      $('joyThumb').style.transform='';
+      keys.KeyW=keys.KeyS=keys.KeyA=keys.KeyD=false;
+    }else if(t.identifier===tAim.id){
+      tAim.id=null;mouse.down=false;
+    }
+  }
+  e.preventDefault();
+}
+function showTouch(){if(isTouch)tcEl.classList.add('visible');}
+function hideTouch(){if(isTouch)tcEl.classList.remove('visible');}
 
 /* ══════════════ 8. EFFECTS ══════════════ */
 function spawnP(x,y,vx,vy,life,color,size,drag=.92){
@@ -746,7 +840,7 @@ function drawUpgrades(n){
   return out;
 }
 function openLevelUp(){
-  state='LEVEL';show(els.ovLevel);els.cards.innerHTML='';
+  state='LEVEL';show(els.ovLevel);els.cards.innerHTML='';cgStop();hideTouch();
   for(const u of drawUpgrades(3)){
     const d=document.createElement('div');
     d.className='card '+u.rar;
@@ -755,7 +849,7 @@ function openLevelUp(){
     d.onclick=()=>{
       u.a();sfx.pickup();hide(els.ovLevel);levelUps--;
       if(levelUps>0)setTimeout(openLevelUp,200);
-      else state='PLAY';
+      else{state='PLAY';cgStart();showTouch();}
     };
     els.cards.appendChild(d);
   }
@@ -1061,12 +1155,12 @@ function startRun(){
   audioInit();resetGame();
   hide(els.ovMenu);hide(els.ovOver);hide(els.ovPause);hide(els.ovLevel);
   els.hud.style.display='block';
-  state='PLAY';
+  state='PLAY';cgStart();showTouch();
 }
-function pauseGame(){state='PAUSE';show(els.ovPause);}
-function resumeGame(){hide(els.ovPause);state='PLAY';}
+function pauseGame(){state='PAUSE';show(els.ovPause);cgStop();hideTouch();}
+function resumeGame(){hide(els.ovPause);state='PLAY';cgStart();showTouch();}
 function gameOver(){
-  state='OVER';player.alive=false;
+  state='OVER';player.alive=false;cgStop();hideTouch();
   explosion(player.x,player.y,'#7df9ff',34);
   explosion(player.x,player.y,'#ff3355',26);
   shake+=28;hitStop=.12;sfx.boom(true);
@@ -1092,6 +1186,7 @@ els.menuStats.innerHTML=
   `TOTAL KILLS <span>${fmt(save.totalKills)}</span> · BOSSES SLAIN <span>${save.bossKills}</span> · `+
   `ACHIEVEMENTS <span>${Object.keys(save.ach).length}/${ACH.length}</span>`;
 
+cgLoadingStop();
 let last=performance.now();
 function loop(now){
   requestAnimationFrame(loop);
